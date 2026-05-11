@@ -1,52 +1,21 @@
 <script>
 	import '../app.css';
+	import Logo from '$lib/Logo.svelte';
+	import { INSTAGRAM_URL } from '$lib/siteUrls.js';
 	import { page } from '$app/stores';
 
 	let { children } = $props();
-
-	let cursorX = $state(-100);
-	let cursorY = $state(-100);
-	let isScooping = $state(false);
-
-	function onMouseMove(e) {
-		cursorX = e.clientX;
-		cursorY = e.clientY;
-	}
-
-	function onGlobalClick() {
-		isScooping = true;
-		setTimeout(() => {
-			isScooping = false;
-		}, 480);
-	}
 </script>
-
-<svelte:window onmousemove={onMouseMove} onclick={onGlobalClick} />
-
-<!-- Custom spoon cursor -->
-<div
-	class="spoon-cursor"
-	class:scooping={isScooping}
-	style="left:{cursorX}px;top:{cursorY}px"
-	aria-hidden="true"
->
-	<img
-		class="spoon-img"
-		src="/img/spoon.svg"
-		width="32"
-		height="32"
-		alt=""
-		draggable="false"
-	/>
-</div>
 
 <div class="layout">
 	<header class="site-header">
-		<a href="/" class="logo">Gohan Diary</a>
+		<a href="/" class="logo" aria-label="Gohan Diary — home">
+			<Logo variant="header" />
+		</a>
 
 		<nav class="site-nav">
-			<a href="/" class:active={$page.url.pathname === '/'}>Recipes</a>
-			<a href="/admin/new" class="btn-add">+ New Recipe</a>
+			<a href="/" class:active={$page.url.pathname === '/'}>recipes</a>
+			<a href="/admin/new" class="nav-add" class:active={$page.url.pathname.startsWith('/admin')}>add recipe</a>
 		</nav>
 	</header>
 
@@ -55,59 +24,17 @@
 	</main>
 
 	<footer class="site-footer">
-		<p>Gohan Diary — made with rice &amp; love 🍚</p>
+		<div class="footer-brand">
+			<Logo variant="footer" />
+			<p class="footer-line">Made with rice &amp; love 🍚</p>
+			<p class="footer-social">
+				<a href={INSTAGRAM_URL} target="_blank" rel="noopener noreferrer">@gohan.diaryy on Instagram</a>
+			</p>
+		</div>
 	</footer>
 </div>
 
 <style>
-	/* ── Custom cursor ── */
-	:global(*) {
-		cursor: none !important;
-	}
-
-	.spoon-cursor {
-		position: fixed;
-		top: 0;
-		left: 0;
-		width: 32px;
-		height: 32px;
-		pointer-events: none;
-		z-index: 9999;
-		transform: translate(-6px, -4px);
-		will-change: transform;
-	}
-
-	.spoon-img {
-		display: block;
-		width: 100%;
-		height: 100%;
-		object-fit: contain;
-		user-select: none;
-		pointer-events: none;
-	}
-
-	.spoon-cursor.scooping {
-		animation: scoop 0.48s cubic-bezier(0.4, 0, 0.2, 1);
-	}
-
-	@keyframes scoop {
-		0% {
-			transform: translate(-6px, -4px) rotate(0deg);
-		}
-		20% {
-			transform: translate(-18px, 8px) rotate(-28deg);
-		}
-		50% {
-			transform: translate(-4px, -20px) rotate(18deg);
-		}
-		80% {
-			transform: translate(8px, -10px) rotate(-8deg);
-		}
-		100% {
-			transform: translate(-6px, -4px) rotate(0deg);
-		}
-	}
-
 	/* ── Layout ── */
 	.layout {
 		min-height: 100vh;
@@ -120,36 +47,39 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 0.9rem 2rem;
-		background: var(--cream);
-		border-bottom: 2px solid var(--border);
+		padding: 0.85rem 2rem;
+		background: color-mix(in srgb, var(--surface) 88%, transparent);
+		border-bottom: 3px solid var(--navy-deep);
 		position: sticky;
 		top: 0;
 		z-index: 100;
-		backdrop-filter: blur(8px);
+		backdrop-filter: blur(12px);
+		box-shadow: var(--shadow-navy);
 	}
 
 	.logo {
-		font-family: 'Caveat', cursive;
-		font-size: 2.1rem;
-		font-weight: 700;
-		color: var(--terracotta);
+		display: inline-flex;
+		align-items: center;
 		text-decoration: none;
-		line-height: 1;
-		letter-spacing: -0.01em;
+		line-height: 0;
+		transition: opacity 0.2s;
+	}
+	.logo:hover {
+		opacity: 0.88;
 	}
 
 	.site-nav {
 		display: flex;
 		align-items: center;
-		gap: 1.25rem;
+		gap: 1.5rem;
 	}
 
 	.site-nav a {
-		color: var(--text-medium);
+		font-family: 'Fredoka', system-ui, sans-serif;
+		color: var(--navy-deep);
 		text-decoration: none;
 		font-size: 0.9rem;
-		font-weight: 700;
+		font-weight: 600;
 		letter-spacing: 0.02em;
 		transition: color 0.2s;
 	}
@@ -159,16 +89,16 @@
 		color: var(--terracotta);
 	}
 
-	.btn-add {
-		background: var(--terracotta) !important;
-		color: white !important;
-		padding: 0.4rem 1.1rem;
-		border-radius: 20px;
-		font-size: 0.85rem !important;
-		transition: background 0.2s !important;
+	.nav-add {
+		font-weight: 500;
+		font-size: 0.84rem;
+		color: var(--text-light);
+		letter-spacing: 0.06em;
 	}
-	.btn-add:hover {
-		background: var(--warm-brown) !important;
+
+	.nav-add:hover,
+	.nav-add.active {
+		color: var(--terracotta);
 	}
 
 	/* ── Main & footer ── */
@@ -178,9 +108,42 @@
 
 	.site-footer {
 		text-align: center;
-		padding: 2rem;
-		color: var(--text-light);
+		padding: 2.25rem 2rem 2.5rem;
+		background: linear-gradient(180deg, var(--navy-mid) 0%, var(--navy-deep) 100%);
+		color: var(--text-on-navy);
+		font-size: 0.9rem;
+		border-top: none;
+	}
+
+	.footer-brand {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.35rem;
+	}
+
+	.footer-line {
+		margin: 0;
+		font-size: 0.92rem;
+		font-weight: 600;
+		opacity: 0.92;
+	}
+
+	.footer-social {
+		margin: 0.65rem 0 0;
 		font-size: 0.85rem;
-		border-top: 1px solid var(--border);
+		font-weight: 600;
+	}
+
+	.footer-social a {
+		color: rgba(255, 213, 79, 0.95);
+		text-decoration: none;
+		transition: opacity 0.2s;
+	}
+
+	.footer-social a:hover {
+		opacity: 0.88;
+		text-decoration: underline;
+		text-underline-offset: 3px;
 	}
 </style>

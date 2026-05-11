@@ -1,7 +1,32 @@
+import { dev } from '$app/environment';
+import { timingSafeEqual } from 'node:crypto';
 import { fail, redirect } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { supabase } from '$lib/supabase.js';
 import { getServiceSupabase } from '$lib/supabase-service.server.js';
+
+/** Human-readable PostgREST / Postgres error for the admin form + terminal logs. */
+function formatSupabaseError(err, context) {
+	if (!err || typeof err !== 'object') return String(err ?? 'Unknown error');
+	const parts = [];
+	const o = /** @type {{ message?: string; code?: string; details?: string; hint?: string }} */ (err);
+	if (o.message) parts.push(o.message);
+	if (o.code) parts.push(`Code: ${o.code}`);
+	if (o.details) parts.push(`Details: ${o.details}`);
+	if (o.hint) parts.push(`Hint: ${o.hint}`);
+	const text = parts.join('\n');
+	if (dev) {
+		console.error(`[admin/createRecipe] ${context}`, {
+			message: o.message,
+			code: o.code,
+			details: o.details,
+			hint: o.hint
+		});
+	} else {
+		console.error(`[admin/createRecipe] ${context}`, text);
+	}
+	return text;
+}
 
 export async function load() {
 	const { data: tags, error } = await supabase
@@ -18,12 +43,12 @@ export async function load() {
 	return { tags: tags ?? [] };
 }
 
-async function passwordMatches(provided, expected) {
+function passwordMatches(provided, expected) {
 	const enc = new TextEncoder();
 	const a = enc.encode(provided);
 	const b = enc.encode(expected);
 	if (a.length !== b.length) return false;
-	return crypto.subtle.timingSafeEqual(a, b);
+	return timingSafeEqual(a, b);
 }
 
 export const actions = {
@@ -36,7 +61,7 @@ export const actions = {
 		const formData = await request.formData();
 		const password = String(formData.get('admin_password') ?? '');
 
-		if (!(await passwordMatches(password, expected))) {
+		if (!passwordMatches(password, expected)) {
 			return fail(400, { error: 'Incorrect password.' });
 		}
 
@@ -46,7 +71,22 @@ export const actions = {
 		}
 
 		const description = String(formData.get('description') ?? '').trim() || null;
+		const ingredients = String(formData.get('ingredients') ?? '').trim() || null;
 		const instructions = String(formData.get('instructions') ?? '').trim() || null;
+
+		const sourceUrlRaw = String(formData.get('source_url') ?? '').trim();
+		let sourceUrl = null;
+		if (sourceUrlRaw) {
+			try {
+				const u = new URL(sourceUrlRaw);
+				if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+					return fail(400, { error: 'Source URL must start with http:// or https://.' });
+				}
+				sourceUrl = u.href;
+			} catch {
+				return fail(400, { error: 'Source URL is not valid. Paste a full link (https://…).' });
+			}
+		}
 
 		const ratingRaw = formData.get('rating');
 		const ratingNum = ratingRaw ? Number(ratingRaw) : NaN;
@@ -76,7 +116,9 @@ export const actions = {
 				upsert: false
 			});
 			if (uploadErr) {
-				return fail(500, { error: uploadErr.message });
+				return fail(500, {
+					error: formatSupabaseError(uploadErr, 'storage upload') + (dev ? '\n\n(Terminal has full object.)' : '')
+				});
 			}
 			const {
 				data: { publicUrl }
@@ -89,8 +131,10 @@ export const actions = {
 			.insert({
 				title,
 				description,
+				ingredients,
 				instructions,
 				image_url: imageUrl,
+				source_url: sourceUrl,
 				rating,
 				created_by: null
 			})
@@ -98,7 +142,12 @@ export const actions = {
 			.single();
 
 		if (insertErr || !recipe) {
-			return fail(500, { error: insertErr?.message ?? 'Could not save recipe.' });
+			const msg =
+				formatSupabaseError(insertErr, 'recipes insert') +
+				(dev
+					? '\n\nTip: confirm SUPABASE_SERVICE_ROLE_KEY is the service_role secret (not anon), run migrations 005 in SQL Editor, and watch this terminal while reproducing.'
+					: '');
+			return fail(500, { error: msg || 'Could not save recipe.' });
 		}
 
 		if (tagIds.length > 0) {
@@ -106,7 +155,10 @@ export const actions = {
 				tagIds.map((tag_id) => ({ recipe_id: recipe.id, tag_id }))
 			);
 			if (tagErr) {
-				return fail(500, { error: tagErr.message });
+				return fail(500, {
+					error:
+						formatSupabaseError(tagErr, 'recipe_tags insert') + (dev ? '\n\n(Terminal has full object.)' : '')
+				});
 			}
 		}
 

@@ -1,15 +1,39 @@
 <script>
 	import { enhance } from '$app/forms';
+	import Logo from '$lib/Logo.svelte';
+	import { sortTagsForCategory } from '$lib/tagOrder.js';
 
 	let { data, form } = $props();
 
 	let title = $state('');
 	let description = $state('');
+	let ingredients = $state('');
 	let instructions = $state('');
 	let rating = $state(0);
 	let hoverRating = $state(0);
 	let selectedTagIds = $state([]);
 	let imagePreview = $state('');
+	let adminPassword = $state('');
+	let pasteText = $state('');
+	let sourceUrl = $state('');
+	let parseLoading = $state(false);
+	let parseMessage = $state('');
+	let parseError = $state('');
+
+	/** Pull first http(s) URL from pasted web copy so source can be logged automatically. */
+	function extractFirstHttpUrl(text) {
+		const m = text.match(/https?:\/\/[^\s<>"'`)\]}]+/i);
+		if (!m) return '';
+		return m[0].replace(/[.,;:)]+$/, '');
+	}
+
+	const categoryOrder = ['protein', 'complexity', 'time'];
+
+	const categoryLabel = {
+		protein: 'Protein',
+		complexity: 'Complexity',
+		time: 'Time'
+	};
 
 	const tagsByCategory = $derived.by(() => {
 		const groups = {};
@@ -17,10 +41,11 @@
 			if (!groups[tag.category]) groups[tag.category] = [];
 			groups[tag.category].push(tag);
 		}
+		for (const key of Object.keys(groups)) {
+			groups[key] = sortTagsForCategory(groups[key], key);
+		}
 		return groups;
 	});
-
-	const categoryOrder = ['protein', 'complexity', 'time'];
 
 	function handleImageSelect(e) {
 		const file = e.target.files?.[0];
@@ -39,6 +64,55 @@
 	function setRating(n) {
 		rating = rating === n ? 0 : n;
 	}
+
+	async function formatWithAI() {
+		parseMessage = '';
+		parseError = '';
+		if (!pasteText.trim()) {
+			parseError = 'Paste some recipe text first.';
+			return;
+		}
+		if (!adminPassword.trim()) {
+			parseError = 'Enter the site password first.';
+			return;
+		}
+		parseLoading = true;
+		try {
+			const res = await fetch('/api/parse-recipe', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ text: pasteText, admin_password: adminPassword.trim() })
+			});
+			const raw = await res.text();
+			let data = {};
+			try {
+				data = raw ? JSON.parse(raw) : {};
+			} catch {
+				parseError =
+					raw && raw.includes('<!DOCTYPE')
+						? `Server error (${res.status}). Check Netlify logs and env vars (GEMINI_API_KEY, ADMIN_PASSWORD).`
+						: `Request failed (${res.status}). ${(raw || '').slice(0, 240)}`;
+				return;
+			}
+			if (!res.ok) {
+				parseError =
+					typeof data.message === 'string' ? data.message : `Request failed (${res.status}).`;
+				return;
+			}
+			title = typeof data.title === 'string' ? data.title : '';
+			ingredients = typeof data.ingredients === 'string' ? data.ingredients : '';
+			instructions = typeof data.instructions === 'string' ? data.instructions : '';
+			if (!sourceUrl.trim()) {
+				const extracted = extractFirstHttpUrl(pasteText);
+				if (extracted) sourceUrl = extracted;
+			}
+			parseMessage = 'Title, ingredients, and steps updated from pasted text.';
+		} catch {
+			parseError = 'Could not reach the server. Try again.';
+		} finally {
+			parseLoading = false;
+		}
+	}
 </script>
 
 <svelte:head>
@@ -48,7 +122,42 @@
 <div class="admin-page">
 	<div class="container">
 		<a href="/" class="back">← Back to Recipes</a>
+		<div class="admin-brand">
+			<Logo variant="inline" />
+		</div>
 		<h1>Add a New Recipe</h1>
+
+		<details class="paste-from-web">
+			<summary>Paste a recipe from the web</summary>
+			<div class="paste-inner">
+				<p class="paste-hint">
+					Paste a messy block copied from a blog or recipe site. Enter your site password (next field), then click
+					<strong>Format with AI</strong> to extract the title, ingredient lines (with amounts + units), and step-by-step
+					instructions. Your <strong>Notes</strong> field is never filled by AI—add those yourself. If the paste includes
+					a link, <strong>Original recipe URL</strong> fills in automatically (you can edit it).
+				</p>
+				<label for="paste-recipe" class="sr-only">Raw pasted recipe text</label>
+				<textarea
+					id="paste-recipe"
+					class="paste-textarea"
+					bind:value={pasteText}
+					rows="12"
+					placeholder="Paste article text, ingredients lists, and directions here…"
+					disabled={parseLoading}
+				></textarea>
+				<div class="paste-actions">
+					<button type="button" class="parse-ai-btn" onclick={formatWithAI} disabled={parseLoading}>
+						{parseLoading ? 'Formatting…' : 'Format with AI'}
+					</button>
+				</div>
+				{#if parseMessage}
+					<p class="parse-success">{parseMessage}</p>
+				{/if}
+				{#if parseError}
+					<p class="parse-error">{parseError}</p>
+				{/if}
+			</div>
+		</details>
 
 		<form
 			class="form"
@@ -57,21 +166,37 @@
 			enctype="multipart/form-data"
 			use:enhance
 		>
+			<!-- Site password (shared: AI parse + save) -->
+			<div class="field">
+				<label for="admin_password">Site password <span class="required">*</span></label>
+				<input
+					id="admin_password"
+					name="admin_password"
+					type="text"
+					autocomplete="off"
+					spellcheck="false"
+					required
+					placeholder="Password to publish recipes"
+					bind:value={adminPassword}
+				/>
+			</div>
+
 			<!-- Title -->
 			<div class="field">
 				<label for="title">Title <span class="required">*</span></label>
 				<input id="title" name="title" type="text" bind:value={title} placeholder="e.g. Miso Ramen" required />
 			</div>
 
-			<!-- Description -->
+			<!-- Ingredients (scaled on published recipe when quantities use units) -->
 			<div class="field">
-				<label for="desc">Description</label>
+				<label for="ingredients">Ingredients</label>
+				<span class="hint">One ingredient per line — include amounts and units (e.g. 2 cups flour, 15 ml sesame oil).</span>
 				<textarea
-					id="desc"
-					name="description"
-					bind:value={description}
-					rows="3"
-					placeholder="A short note about this dish — where it's from, why you love it…"
+					id="ingredients"
+					name="ingredients"
+					bind:value={ingredients}
+					rows="10"
+					placeholder={"2 cups short-grain rice\n600 ml water\n1 tbsp butter"}
 				></textarea>
 			</div>
 
@@ -83,9 +208,37 @@
 					id="instr"
 					name="instructions"
 					bind:value={instructions}
-					rows="9"
-					placeholder={"Boil the water.\nAdd noodles and cook 3 minutes.\nLadle in miso broth. Serve."}
+					rows="12"
+					placeholder={"Rinse rice until water runs clear.\nCombine rice and water in a pot; bring to a boil.\nCover and simmer until tender."}
 				></textarea>
+			</div>
+
+			<!-- Notes (manual only — not from Format with AI) -->
+			<div class="field">
+				<label for="desc">Notes</label>
+				<span class="hint">Optional — your thoughts, substitutions, what worked; not filled automatically.</span>
+				<textarea
+					id="desc"
+					name="description"
+					bind:value={description}
+					rows="3"
+					placeholder="What I'd change next time, where it's from, pairing ideas…"
+				></textarea>
+			</div>
+
+			<!-- Source URL (logged when adapting from the web) -->
+			<div class="field">
+				<label for="source_url">Original recipe URL</label>
+				<span class="hint">Optional — the page you copied from (https://…).</span>
+				<input
+					id="source_url"
+					name="source_url"
+					type="url"
+					inputmode="url"
+					autocomplete="off"
+					bind:value={sourceUrl}
+					placeholder="https://example.com/recipe"
+				/>
 			</div>
 
 			<!-- Photo -->
@@ -148,7 +301,7 @@
 					<div class="tags-grid" role="group" aria-labelledby="admin-tags-label">
 						{#each categoryOrder.filter((c) => tagsByCategory[c]) as cat}
 							<div class="tag-group">
-								<p class="tag-group-label">{cat}</p>
+								<p class="tag-group-label">{categoryLabel[cat] ?? cat}</p>
 								<div class="tag-checks">
 									{#each tagsByCategory[cat] as tag}
 										<label class="tag-check">
@@ -163,21 +316,8 @@
 				</div>
 			{/if}
 
-			<!-- Site password -->
-			<div class="field">
-				<label for="admin_password">Site password <span class="required">*</span></label>
-				<input
-					id="admin_password"
-					name="admin_password"
-					type="password"
-					autocomplete="current-password"
-					required
-					placeholder="Password to publish recipes"
-				/>
-			</div>
-
 			{#if form?.error}
-				<p class="form-error">{form.error}</p>
+				<pre class="form-error-detail">{form.error}</pre>
 			{/if}
 
 			<button type="submit" class="submit-btn">Save Recipe</button>
@@ -208,11 +348,115 @@
 		color: var(--terracotta);
 	}
 
+	.admin-brand {
+		line-height: 0;
+		margin-bottom: 0.5rem;
+	}
+
 	h1 {
-		font-family: 'Caveat', cursive;
-		font-size: 2.6rem;
-		color: var(--terracotta);
+		font-size: 2.35rem;
+		color: var(--navy-deep);
 		margin-bottom: 2.25rem;
+	}
+
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
+	}
+
+	.paste-from-web {
+		margin-bottom: 2rem;
+		border: 2px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--cream-dark);
+		overflow: hidden;
+	}
+
+	.paste-from-web summary {
+		cursor: pointer;
+		padding: 0.85rem 1.1rem;
+		font-weight: 700;
+		font-size: 0.95rem;
+		color: var(--olive-dark);
+		list-style: none;
+	}
+	.paste-from-web summary::-webkit-details-marker {
+		display: none;
+	}
+	.paste-from-web summary::before {
+		content: '▸ ';
+		display: inline-block;
+		transition: transform 0.15s;
+	}
+	.paste-from-web[open] summary::before {
+		transform: rotate(90deg);
+	}
+
+	.paste-inner {
+		padding: 0 1.1rem 1.15rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.65rem;
+	}
+
+	.paste-hint {
+		font-size: 0.82rem;
+		color: var(--text-light);
+		line-height: 1.5;
+		margin: 0;
+	}
+
+	.paste-textarea {
+		min-height: 200px;
+		font-size: 0.88rem;
+	}
+
+	.paste-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.parse-ai-btn {
+		background: var(--olive-dark);
+		color: white;
+		border: none;
+		padding: 0.65rem 1.35rem;
+		border-radius: 24px;
+		font-size: 0.92rem;
+		font-family: inherit;
+		font-weight: 700;
+		cursor: pointer;
+		transition:
+			background 0.2s,
+			opacity 0.2s;
+	}
+	.parse-ai-btn:hover:not(:disabled) {
+		filter: brightness(1.08);
+	}
+	.parse-ai-btn:disabled {
+		opacity: 0.65;
+		cursor: not-allowed;
+	}
+
+	.parse-success {
+		font-size: 0.88rem;
+		color: #2d6a4f;
+		font-weight: 600;
+		margin: 0;
+	}
+
+	.parse-error {
+		font-size: 0.88rem;
+		color: #c0392b;
+		margin: 0;
 	}
 
 	.form {
@@ -247,7 +491,7 @@
 	}
 
 	input[type='text'],
-	input[type='password'],
+	input[type='url'],
 	textarea {
 		padding: 0.7rem 1rem;
 		border: 2px solid var(--border);
@@ -255,12 +499,12 @@
 		font-family: inherit;
 		font-size: 0.95rem;
 		color: var(--text);
-		background: white;
+		background: var(--surface);
 		transition: border-color 0.2s;
 		width: 100%;
 	}
 	input[type='text']:focus,
-	input[type='password']:focus,
+	input[type='url']:focus,
 	textarea:focus {
 		outline: none;
 		border-color: var(--terracotta-light);
@@ -392,14 +636,36 @@
 		accent-color: var(--terracotta);
 	}
 
+	@media (max-width: 640px) {
+		.tags-grid {
+			flex-direction: column;
+			gap: 1.25rem;
+		}
+		.tag-group {
+			flex: none;
+			min-width: 0;
+			width: 100%;
+		}
+	}
+
 	/* Error & submit */
-	.form-error {
+	.form-error,
+	.form-error-detail {
 		background: #fdf0ef;
 		border: 1px solid #e8b4b0;
 		color: #c0392b;
 		padding: 0.75rem 1rem;
 		border-radius: 8px;
 		font-size: 0.9rem;
+	}
+	.form-error-detail {
+		margin: 0;
+		white-space: pre-wrap;
+		word-break: break-word;
+		font-family: inherit;
+		line-height: 1.5;
+		max-height: 22rem;
+		overflow: auto;
 	}
 
 	.submit-btn {
